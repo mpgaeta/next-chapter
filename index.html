@@ -79,7 +79,7 @@ async function moveBook(id){
  if(error)alert('Change was not saved: '+error.message);else await loadBooks();
 }
 function addAuthor(){let name=prompt('Favorite author name');if(name&&name.trim()&&!authors.some(a=>a.toLowerCase()===name.trim().toLowerCase())){authors.push(name.trim());localStorage.setItem('next-chapter-authors-v2',JSON.stringify(authors));render()}}
-function searchAuthor(a){window.open('https://openlibrary.org/search?author='+encodeURIComponent(a),'_blank','noopener,noreferrer')}
+function searchAuthor(a){window.open('https://openlibrary.org/search?author='+encodeURIComponent(a.replace(/\bC\.?\s*J\.?\s*Box\b/i,'Box')),'_blank','noopener,noreferrer')}
 function downloadBackup(){let blob=new Blob([JSON.stringify({books,authors},null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='next-chapter-backup.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
 async function signOut(){await db.auth.signOut();user=null;books=[];loginScreen()}
 document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>setTab(b.dataset.tab));
