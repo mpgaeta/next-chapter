@@ -10,21 +10,35 @@ const genres=['','Mystery / Thriller','Fiction','Nonfiction','Biography','Advent
 const initialAuthors=["CJ Box","David Baldacci","James Patterson","John Grisham","Lee Child","Steven Fry","Walter Isaacson","Harlan Coplan ??","Marcia Clark","Michael Connelly"];
 let authors=[];
 function authorStorageKey(){return user?'next-chapter-authors-user-'+user.id:null}
-function loadAuthors(){
- const key=authorStorageKey();if(!key){authors=[];return}
- const stored=localStorage.getItem(key);
- if(stored!==null){try{authors=JSON.parse(stored)||[]}catch{authors=[]}return}
- // Transfer the old browser-only list to the first account that opens this updated app.
- const ownerKey='next-chapter-legacy-authors-owner';
- let owner=localStorage.getItem(ownerKey);
- if(!owner){owner=user.id;localStorage.setItem(ownerKey,owner)}
- if(owner===user.id){
-  try{authors=JSON.parse(localStorage.getItem('next-chapter-authors-v2')||'null')||initialAuthors}catch{authors=initialAuthors.slice()}
- }else{authors=[]}
- localStorage.setItem(key,JSON.stringify(authors));
+function localAuthorCandidates(){
+ const key=authorStorageKey();
+ let saved=[];
+ for(const k of [key,'next-chapter-authors-v2']){
+  if(!k)continue;
+  try{const value=JSON.parse(localStorage.getItem(k)||'null');if(Array.isArray(value))saved.push(...value)}catch{}
+ }
+ return [...new Map(saved.filter(a=>typeof a==='string'&&a.trim()).map(a=>[a.trim().toLowerCase(),a.trim()])).values()];
 }
-function saveAuthors(){const key=authorStorageKey();if(key)localStorage.setItem(key,JSON.stringify(authors))}
-let books=[],tab='read',query='',user=null,busy=false;
+async function loadAuthors(){
+ if(!user)return;
+ const currentUser=user.id;
+ const {data,error}=await db.from('favorite_authors').select('name').eq('user_id',currentUser);
+ if(error){console.error('Unable to load favorite authors:',error);authors=[];authorError=error.message;return}
+ authorError='';
+ authors=(data||[]).map(a=>a.name).filter(Boolean);
+ // One-time import from this browser, only if the cloud list is empty.
+ const migrationKey='next-chapter-authors-migrated-'+currentUser;
+ if(!authors.length&&!localStorage.getItem(migrationKey)){
+  const oldAuthors=localAuthorCandidates();
+  if(oldAuthors.length){
+   const {error:importError}=await db.from('favorite_authors').insert(oldAuthors.map(name=>({name,user_id:currentUser})));
+   if(importError){authorError='Could not import existing authors: '+importError.message;return}
+   authors=oldAuthors;
+  }
+ }
+ localStorage.setItem(migrationKey,'1');
+}
+let books=[],tab='read',query='',user=null,busy=false,authorError='';
 const norm=s=>String(s||'').toLowerCase()==='read'?'read':'want';
 function statusDb(s){return s==='read'?'Read':'To Read'}
 function message(t){el('content').innerHTML='<div class="notice">'+esc(t)+'</div>'}
@@ -34,7 +48,8 @@ async function boot(){
  if(error){message(error.message);return}
  user=session?.user||null;
  if(!user){loginScreen();return}
- await loadBooks();
+ await Promise.all([loadBooks(),loadAuthors()]);
+ render();
 }
 function loginScreen(note=''){
  el('readCount').textContent='—';el('wantCount').textContent='—';el('authorCount').textContent=authors.length;
@@ -61,7 +76,7 @@ function render(){
  content.innerHTML=`<div class="heading"><h2>${tab==='read'?'Books Read':'To Read'}</h2><button onclick="editBook()">+ Add book</button></div><div class="toolbar"><input aria-label="Search books" placeholder="Search title, author or genre" value="${esc(query)}" oninput="query=this.value;renderList()"></div><div id="bookList"></div><p class="small"><button class="secondary" onclick="signOut()">Sign out</button></p>`;
  renderList();
  }else if(tab==='authors'){
- content.innerHTML=`<div class="heading"><h2>Favorite Authors</h2><button onclick="addAuthor()">+ Add author</button></div><p class="small">Favorite authors are private to this account and saved on this device. They do not yet sync between devices.</p>${authors.map(a=>`<div class="author"><div><b>${esc(a)}</b><div class="small">${books.filter(b=>b.author.toLowerCase()===a.toLowerCase()).length} books in library</div></div><div class="author-actions"><button class="secondary" onclick='searchAuthor(${JSON.stringify(a)})'>Find books</button><button class="danger" onclick='deleteAuthor(${JSON.stringify(a)})'>Delete</button></div></div>`).join('')}<button class="secondary" onclick="signOut()">Sign out</button>`;
+ content.innerHTML=`<div class="heading"><h2>Favorite Authors</h2><button onclick="addAuthor()">+ Add author</button></div><p class="small">Favorite authors are saved securely to your account and sync between devices.${authorError?' <strong>Sync error: '+esc(authorError)+'</strong>':''}</p>${authors.map(a=>`<div class="author"><div><b>${esc(a)}</b><div class="small">${books.filter(b=>b.author.toLowerCase()===a.toLowerCase()).length} books in library</div></div><div class="author-actions"><button class="secondary" onclick='searchAuthor(${JSON.stringify(a)})'>Find books</button><button class="danger" onclick='deleteAuthor(${JSON.stringify(a)})'>Delete</button></div></div>`).join('')}<button class="secondary" onclick="signOut()">Sign out</button>`;
  }else{
  let ranked=books.filter(b=>b.status==='read'&&b.rating>=4).sort((a,b)=>b.rating-a.rating);
  content.innerHTML=`<div class="heading"><h2>Recommended Books</h2></div><div class="notice"><b>Recommendation starter</b><p>Browse favorite authors and highly rated books. Automatic release alerts are not available yet.</p></div><h3>Your highest-rated books</h3>${ranked.length?ranked.slice(0,6).map(b=>`<div class="book"><h3>${esc(b.title)}</h3><p>${esc(b.author)} · <span class="stars">${'★'.repeat(b.rating)}</span></p></div>`).join(''):'<p class="muted">Rate some books 4 or 5 stars to guide future recommendations.</p>'}<h3>Explore favorite authors</h3>${authors.map(a=>`<div class="author"><b>${esc(a)}</b><button onclick='searchAuthor(${JSON.stringify(a)})'>Search Open Library ↗</button></div>`).join('')}<p class="muted">New titles must be added manually.</p><div class="toolbar"><button class="secondary" onclick="downloadBackup()">Download my data backup</button><button class="secondary" onclick="signOut()">Sign out</button></div>`;
@@ -93,13 +108,23 @@ async function moveBook(id){
  let {error}=await db.from('books').update({status:statusDb(b.status==='read'?'want':'read')}).eq('id',id).eq('user_id',user.id);
  if(error)alert('Change was not saved: '+error.message);else await loadBooks();
 }
-function addAuthor(){let name=prompt('Favorite author name');if(name&&name.trim()&&!authors.some(a=>a.toLowerCase()===name.trim().toLowerCase())){authors.push(name.trim());saveAuthors();render()}}
-function deleteAuthor(name){
-  if(!authors.includes(name))return;
-  if(!confirm('Remove '+name+' from your favorite authors? Your books will not be deleted.'))return;
-  authors=authors.filter(a=>a!==name);
-  localStorage.setItem('next-chapter-authors-v2',JSON.stringify(authors));
-  render();
+async function addAuthor(){
+ if(authorError){alert('Author sync is not available: '+authorError);return}
+ let name=prompt('Favorite author name');
+ if(!name||!name.trim())return;
+ name=name.trim();
+ if(authors.some(a=>a.toLowerCase()===name.toLowerCase()))return;
+ const {error}=await db.from('favorite_authors').insert({name,user_id:user.id});
+ if(error){alert('Author was not saved: '+error.message);return}
+ await loadAuthors();render();
+}
+async function deleteAuthor(name){
+ if(authorError){alert('Author sync is not available: '+authorError);return}
+ if(!authors.includes(name))return;
+ if(!confirm('Remove '+name+' from your favorite authors? Your books will not be deleted.'))return;
+ const {error}=await db.from('favorite_authors').delete().eq('user_id',user.id).eq('name',name);
+ if(error){alert('Author was not deleted: '+error.message);return}
+ await loadAuthors();render();
 }
 function searchAuthor(a){window.open('https://openlibrary.org/search?author='+encodeURIComponent(a.replace(/\bC\.?\s*J\.?\s*Box\b/i,'Box')),'_blank','noopener,noreferrer')}
 function downloadBackup(){let blob=new Blob([JSON.stringify({books,authors},null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='next-chapter-backup.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
