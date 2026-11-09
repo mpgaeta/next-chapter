@@ -8,7 +8,22 @@ const el=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
 const genres=['','Mystery / Thriller','Fiction','Nonfiction','Biography','Adventure','Sports','Romance','Other'];
 const initialAuthors=["CJ Box","David Baldacci","James Patterson","John Grisham","Lee Child","Steven Fry","Walter Isaacson","Harlan Coplan ??","Marcia Clark","Michael Connelly"];
-let authors=JSON.parse(localStorage.getItem('next-chapter-authors-v2')||'null')||initialAuthors;
+let authors=[];
+function authorStorageKey(){return user?'next-chapter-authors-user-'+user.id:null}
+function loadAuthors(){
+ const key=authorStorageKey();if(!key){authors=[];return}
+ const stored=localStorage.getItem(key);
+ if(stored!==null){try{authors=JSON.parse(stored)||[]}catch{authors=[]}return}
+ // Transfer the old browser-only list to the first account that opens this updated app.
+ const ownerKey='next-chapter-legacy-authors-owner';
+ let owner=localStorage.getItem(ownerKey);
+ if(!owner){owner=user.id;localStorage.setItem(ownerKey,owner)}
+ if(owner===user.id){
+  try{authors=JSON.parse(localStorage.getItem('next-chapter-authors-v2')||'null')||initialAuthors}catch{authors=initialAuthors.slice()}
+ }else{authors=[]}
+ localStorage.setItem(key,JSON.stringify(authors));
+}
+function saveAuthors(){const key=authorStorageKey();if(key)localStorage.setItem(key,JSON.stringify(authors))}
 let books=[],tab='read',query='',user=null,busy=false;
 const norm=s=>String(s||'').toLowerCase()==='read'?'read':'want';
 function statusDb(s){return s==='read'?'Read':'To Read'}
@@ -23,7 +38,7 @@ async function boot(){
 }
 function loginScreen(note=''){
  el('readCount').textContent='—';el('wantCount').textContent='—';el('authorCount').textContent=authors.length;
- el('content').innerHTML=`<div class="book"><h2>Sign in to Next Chapter</h2><p>Your books are private and saved in Supabase.</p>${note?'<div class="notice">'+esc(note)+'</div>':''}<form id="loginForm"><div class="field"><label>Email address<input name="email" type="email" required autocomplete="email"></label></div><div class="field"><label>Password<input name="password" type="password" required autocomplete="current-password"></label></div><button type="submit">Sign in</button></form><p><button class="secondary" id="magic">Email me a sign-in link</button></p><p class="small">If you created your account without a password, use the email sign-in link.</p></div>`;
+ el('content').innerHTML=`<div class="book"><h2>Sign in to Next Chapter</h2><p>Your books are private and saved in Supabase.</p>${note?'<div class="notice">'+esc(note)+'</div>':''}<form id="loginForm"><div class="field"><label>Email address<input name="email" type="email" required autocomplete="email"></label></div><div class="field"><label>Password<input name="password" type="password" required autocomplete="current-password"></label></div><button type="submit">Sign in</button> <button type="button" class="secondary" id="signup">Create account</button></form><p><button class="secondary" id="magic">Email me a sign-in link</button></p><p class="small">If you created your account without a password, use the email sign-in link.</p></div>`;
  el('loginForm').onsubmit=async e=>{e.preventDefault();let f=new FormData(e.target);message('Signing in…');let {error}=await db.auth.signInWithPassword({email:f.get('email'),password:f.get('password')});if(error)loginScreen(error.message);else boot()};
  el('magic').onclick=async()=>{let email=el('loginForm').elements.email.value.trim();if(!email){alert('Please enter your email address first.');return}let {error}=await db.auth.signInWithOtp({email,options:{emailRedirectTo:location.origin+location.pathname,shouldCreateUser:false}});loginScreen(error?error.message:'Check your email for a sign-in link. Open the link in this browser.')};
 }
@@ -46,7 +61,7 @@ function render(){
  content.innerHTML=`<div class="heading"><h2>${tab==='read'?'Books Read':'To Read'}</h2><button onclick="editBook()">+ Add book</button></div><div class="toolbar"><input aria-label="Search books" placeholder="Search title, author or genre" value="${esc(query)}" oninput="query=this.value;renderList()"></div><div id="bookList"></div><p class="small"><button class="secondary" onclick="signOut()">Sign out</button></p>`;
  renderList();
  }else if(tab==='authors'){
- content.innerHTML=`<div class="heading"><h2>Favorite Authors</h2><button onclick="addAuthor()">+ Add author</button></div><p class="small">Favorite authors are currently saved only in this browser.</p>${authors.map(a=>`<div class="author"><div><b>${esc(a)}</b><div class="small">${books.filter(b=>b.author.toLowerCase()===a.toLowerCase()).length} books in library</div></div><div class="author-actions"><button class="secondary" onclick='searchAuthor(${JSON.stringify(a)})'>Find books</button><button class="danger" onclick='deleteAuthor(${JSON.stringify(a)})'>Delete</button></div></div>`).join('')}<button class="secondary" onclick="signOut()">Sign out</button>`;
+ content.innerHTML=`<div class="heading"><h2>Favorite Authors</h2><button onclick="addAuthor()">+ Add author</button></div><p class="small">Favorite authors are private to this account and saved on this device. They do not yet sync between devices.</p>${authors.map(a=>`<div class="author"><div><b>${esc(a)}</b><div class="small">${books.filter(b=>b.author.toLowerCase()===a.toLowerCase()).length} books in library</div></div><div class="author-actions"><button class="secondary" onclick='searchAuthor(${JSON.stringify(a)})'>Find books</button><button class="danger" onclick='deleteAuthor(${JSON.stringify(a)})'>Delete</button></div></div>`).join('')}<button class="secondary" onclick="signOut()">Sign out</button>`;
  }else{
  let ranked=books.filter(b=>b.status==='read'&&b.rating>=4).sort((a,b)=>b.rating-a.rating);
  content.innerHTML=`<div class="heading"><h2>Recommended Books</h2></div><div class="notice"><b>Recommendation starter</b><p>Browse favorite authors and highly rated books. Automatic release alerts are not available yet.</p></div><h3>Your highest-rated books</h3>${ranked.length?ranked.slice(0,6).map(b=>`<div class="book"><h3>${esc(b.title)}</h3><p>${esc(b.author)} · <span class="stars">${'★'.repeat(b.rating)}</span></p></div>`).join(''):'<p class="muted">Rate some books 4 or 5 stars to guide future recommendations.</p>'}<h3>Explore favorite authors</h3>${authors.map(a=>`<div class="author"><b>${esc(a)}</b><button onclick='searchAuthor(${JSON.stringify(a)})'>Search Open Library ↗</button></div>`).join('')}<p class="muted">New titles must be added manually.</p><div class="toolbar"><button class="secondary" onclick="downloadBackup()">Download my data backup</button><button class="secondary" onclick="signOut()">Sign out</button></div>`;
@@ -78,7 +93,7 @@ async function moveBook(id){
  let {error}=await db.from('books').update({status:statusDb(b.status==='read'?'want':'read')}).eq('id',id).eq('user_id',user.id);
  if(error)alert('Change was not saved: '+error.message);else await loadBooks();
 }
-function addAuthor(){let name=prompt('Favorite author name');if(name&&name.trim()&&!authors.some(a=>a.toLowerCase()===name.trim().toLowerCase())){authors.push(name.trim());localStorage.setItem('next-chapter-authors-v2',JSON.stringify(authors));render()}}
+function addAuthor(){let name=prompt('Favorite author name');if(name&&name.trim()&&!authors.some(a=>a.toLowerCase()===name.trim().toLowerCase())){authors.push(name.trim());saveAuthors();render()}}
 function deleteAuthor(name){
   if(!authors.includes(name))return;
   if(!confirm('Remove '+name+' from your favorite authors? Your books will not be deleted.'))return;
@@ -88,8 +103,8 @@ function deleteAuthor(name){
 }
 function searchAuthor(a){window.open('https://openlibrary.org/search?author='+encodeURIComponent(a.replace(/\bC\.?\s*J\.?\s*Box\b/i,'Box')),'_blank','noopener,noreferrer')}
 function downloadBackup(){let blob=new Blob([JSON.stringify({books,authors},null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='next-chapter-backup.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
-async function signOut(){await db.auth.signOut();user=null;books=[];loginScreen()}
+async function signOut(){await db.auth.signOut();user=null;books=[];authors=[];loginScreen()}
 document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>setTab(b.dataset.tab));
-db.auth.onAuthStateChange((event)=>{if(event==='SIGNED_IN'&&!user)setTimeout(boot,0);if(event==='SIGNED_OUT'){user=null;books=[];loginScreen()}});
+db.auth.onAuthStateChange((event)=>{if(event==='SIGNED_IN'&&!user)setTimeout(boot,0);if(event==='SIGNED_OUT'){user=null;books=[];authors=[];loginScreen()}});
 boot();
 </script></body></html>
