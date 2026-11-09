@@ -6,7 +6,7 @@ const SUPABASE_KEY='sb_publishable_59ROd03RAGiV9vGjIMEjKg_7B9svYHG';
 const db=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
 const el=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
-const genres=['','Mystery / Thriller','Historical Fiction','Nonfiction / History','Biography','Adventure','Other'];
+const genres=['','Mystery / Thriller','Fiction','Nonfiction','Biography','Adventure','Sports','Romance','Other'];
 const initialAuthors=["CJ Box","David Baldacci","James Patterson","John Grisham","Lee Child","Steven Fry","Walter Isaacson","Harlan Coplan ??","Marcia Clark","Michael Connelly"];
 let authors=JSON.parse(localStorage.getItem('next-chapter-authors-v2')||'null')||initialAuthors;
 let books=[],tab='read',query='',user=null,busy=false;
@@ -31,7 +31,7 @@ async function loadBooks(){
  message('Loading your books from Supabase…');
  let {data,error}=await db.from('books').select('*').eq('user_id',user.id).order('id',{ascending:true}).range(0,999);
  if(error){message('Unable to load books: '+error.message);return}
- books=(data||[]).map(b=>({...b,status:norm(b.status),rating:Number(b.rating)||0,genre:b.genre||'',notes:b.notes||''}));
+ books=(data||[]).map(b=>({...b,status:norm(b.status),rating:Number(b.rating)||0,genre:({'Historical Fiction':'Fiction','Nonfiction / History':'Nonfiction'}[b.genre]||b.genre||''),notes:b.notes||''}));
  render();
 }
 function setTab(t){tab=t;query='';render()}
